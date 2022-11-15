@@ -2,6 +2,8 @@
 
 import io
 import os
+import sys
+import shutil
 import json
 import shutil
 import hashlib
@@ -170,11 +172,17 @@ resource = first(tools["localizedResources"], lambda x: x["language"] == "en-us"
 license = resource["license"]
 
 if not args.accept_license:
-    accept = input(f"Do you accept Visual Studio license at {license} [Y/N] ? ")
+    accept = input(f"Do you accept Visual Studio license at {license} ? [y/n]")
     if not accept or accept[0].lower() != "y":
         exit(0)
 print("test 1")
-OUTPUT.mkdir(exist_ok=True)
+if OUTPUT.exists():
+    delete = input("Output directory already exists, delete? [y/n]")
+    if delete:
+        shutil.rmtree(OUTPUT)
+    else:
+        sys.exit("Program terminated. Remove output directory to safely proceed.")
+OUTPUT.mkdir()
 total_download = 0
 print("test 2")
 ### download MSVC
@@ -200,7 +208,20 @@ msvc_packages = [
     #
     f"microsoft.visualstudio.vc.vcvars",
     # Microsoft Foundational Classes
+    f"microsoft.visualstudio.component.vc.{msvc_ver}.mfc",
+    f"microsoft.vc.{msvc_ver}.mfc.headers",
+    f"microsoft.vc.{msvc_ver}.mfc.source",
+    f"microsoft.vc.{msvc_ver}.mfc.x64.spectre",
+    f"microsoft.vc.{msvc_ver}.mfc.redist.x64.spectre",
     f"microsoft.visualstudio.vc.ide.mfc",
+    f"microsoft.visualstudio.vc.ide.mfc.resources",
+    # Active Template Library, dependency of MFC
+    f"microsoft.visualstudio.component.vc.{msvc_ver}.atl",
+    f"microsoft.vc.{msvc_ver}.atl.headers",
+    f"microsoft.vc.{msvc_ver}.atl.source",
+    f"microsoft.vc.{msvc_ver}.atl.x64",
+    f"microsoft.visualstudio.vc.ide.atl",
+    f"microsoft.visualstudio.vc.ide.atl.resources",
 ]
 print("test 3")
 for pkg in msvc_packages:
