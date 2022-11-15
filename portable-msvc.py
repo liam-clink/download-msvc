@@ -33,10 +33,11 @@ def download(url):
             continue
 
 
-def download_progress(url, check, name, f):
+def download_with_progress(url, check, name, f):
     data = io.BytesIO()
     while True:
         try:
+            # urlopen() returns a child of Request object with added methods getinfo(), geturl(), info()
             res = urllib.request.urlopen(url)
             total = int(res.headers["Content-Length"])
             size = 0
@@ -95,26 +96,32 @@ args = ap.parse_args()
 
 
 ### get main manifest
-print("Downloading manifest (packages.json)...")
+print("Downloading main manifest...")
 manifest = json.loads(download(MANIFEST_URL))
 
-
 ### download VS manifest
-
+print("Downloading VS manifest...")
 vs = first(
     manifest["channelItems"],
     lambda x: x["id"] == "Microsoft.VisualStudio.Manifests.VisualStudio",
 )
+# There should only be one payload in the first matching channelItem, this should be the VS manifest
 payload = vs["payloads"][0]["url"]
-
 vsmanifest = json.loads(download(payload))
-
+# Keys for vsmanifest: 'manifestVersion', 'engineVersion', 'info', 'signers', 'packages', 'deprecate', 'signature'
 
 ### find MSVC & WinSDK versions
-
 packages = {}
 for p in vsmanifest["packages"]:
-    packages.setdefault(p["id"].lower(), []).append(p)
+    # This is a bizarre idiom of python. What this does is: if the key p["id"].lower() doesn't exist, add it with an empty list as its value
+    # then append p to either the pre-existing list value or the newly created empty list
+    # setdefault() doesn't just return the value at a key, it returns a "dictionary view" to that value
+    # The view only allows limited operations, it's not like a true reference
+    # For example, you cannot increment a view of an integer
+    # packages.setdefault(p["id"].lower(), []).append(p)
+    # The more understandable (although perhaps less idiomatic) way to do this is
+    packages.setdefault(p["id"].lower(), [])
+    packages[p["id"].lower()].append(p)
 fp = open("packages.json", "w")
 fp.write(json.dumps(packages, sort_keys=True, indent=4, separators=(",", ": ")))
 
@@ -181,7 +188,6 @@ if OUTPUT.exists():
     if delete and delete[0].lower != "y":
         sys.exit("Program terminated. Remove output directory to safely proceed.")
     shutil.rmtree(OUTPUT, ignore_errors=False)
-    OUTPUT.rmdir()
 OUTPUT.mkdir()
 total_download = 0
 print("test 2")
@@ -203,20 +209,23 @@ msvc_packages = [
     f"microsoft.vc.{msvc_ver}.asan.{TARGET}.base",
     # MSVC redist
     # f"microsoft.vc.{msvc_ver}.crt.redist.x64.base",
+    ## Optional stuff
     # CPPWinRT, Dev17 is the codename for Visual Studio 22
     f"microsoft.windows.cppwinrt.dev17",
     #
     f"microsoft.visualstudio.vc.vcvars",
-    # Microsoft Foundational Classes
-    f"microsoft.visualstudio.component.vc.{msvc_ver}.mfc",
+    # Microsoft Foundational Classes, "microsoft.visualstudio.component.vc.{msvc_ver}.mfc"
+    # f"microsoft.vc.{msvc_ver}.mfc.redist.x64",
+    # f"microsoft.vc.{msvc_ver}.mfc.redist.x64.base",
     f"microsoft.vc.{msvc_ver}.mfc.headers",
     f"microsoft.vc.{msvc_ver}.mfc.source",
     f"microsoft.vc.{msvc_ver}.mfc.x64.spectre",
-    f"microsoft.vc.{msvc_ver}.mfc.redist.x64.spectre",
+    f"microsoft.vc.{msvc_ver}.mfc.x86.spectre",
+    f"microsoft.vc.{msvc_ver}.mfc.mbcs",  # Multi-Byte Character Set
+    f"microsoft.vc.{msvc_ver}.mfc.mbcs.x64",
     f"microsoft.visualstudio.vc.ide.mfc",
     f"microsoft.visualstudio.vc.ide.mfc.resources",
-    # Active Template Library, dependency of MFC
-    f"microsoft.visualstudio.component.vc.{msvc_ver}.atl",
+    # Active Template Library, dependency of MFC, "microsoft.visualstudio.component.vc.{msvc_ver}.atl"
     f"microsoft.vc.{msvc_ver}.atl.headers",
     f"microsoft.vc.{msvc_ver}.atl.source",
     f"microsoft.vc.{msvc_ver}.atl.x64",
@@ -226,9 +235,10 @@ msvc_packages = [
 print("test 3")
 for pkg in msvc_packages:
     p = first(packages[pkg], lambda p: p.get("language") in (None, "en-US"))
+    # TODO: Here I could add a search for p.get("dependencies"), or perhaps earlier, build a tree
     for payload in p["payloads"]:
         with tempfile.TemporaryFile() as f:
-            data = download_progress(payload["url"], payload["sha256"], pkg, f)
+            data = download_with_progress(payload["url"], payload["sha256"], pkg, f)
             total_download += len(data)
             with zipfile.ZipFile(f) as z:
                 for name in z.namelist():
@@ -271,7 +281,7 @@ with tempfile.TemporaryDirectory() as d:
         )
         msi.append(dst / pkg)
         with open(dst / pkg, "wb") as f:
-            data = download_progress(payload["url"], payload["sha256"], pkg, f)
+            data = download_with_progress(payload["url"], payload["sha256"], pkg, f)
             total_download += len(data)
             cabs += list(get_msi_cabs(data))
 
@@ -281,7 +291,7 @@ with tempfile.TemporaryDirectory() as d:
             sdk_pkg["payloads"], lambda p: p["fileName"] == f"Installers\\{pkg}"
         )
         with open(dst / pkg, "wb") as f:
-            download_progress(payload["url"], payload["sha256"], pkg, f)
+            download_with_progress(payload["url"], payload["sha256"], pkg, f)
 
     print("Unpacking msi files...")
 
@@ -307,7 +317,7 @@ dbg = packages[pkg][0]
 payload = first(dbg["payloads"], lambda p: p["fileName"] == "cab1.cab")
 try:
     with tempfile.TemporaryFile(suffix=".cab", delete=False) as f:
-        data = download_progress(payload["url"], payload["sha256"], pkg, f)
+        data = download_with_progress(payload["url"], payload["sha256"], pkg, f)
         total_download += len(data)
     subprocess.check_call(
         ["expand.exe", f.name, "-F:*", dst],

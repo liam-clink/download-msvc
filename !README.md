@@ -1,3 +1,6 @@
+# Readme
+
+Forked from: <https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977>
 This downloads standalone 64-bit MSVC compiler, linker & other tools, also headers/libraries from Windows SDK into portable folder, without installing Visual Studio. Has bare minimum components - no UWP/Store/WindowsRT stuff, just files & tools for 64-bit native desktop app development.
 
 Run `python.exe portable-msvc.py` and it will download output into `msvc` folder. By default it will download latest available MSVC & Windows SDK - currently v14.32.17.2 and v10.0.22621.0.
