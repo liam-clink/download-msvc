@@ -95,7 +95,7 @@ args = ap.parse_args()
 
 
 ### get main manifest
-
+print("Downloading manifest (packages.json)...")
 manifest = json.loads(download(MANIFEST_URL))
 
 
@@ -172,16 +172,16 @@ resource = first(tools["localizedResources"], lambda x: x["language"] == "en-us"
 license = resource["license"]
 
 if not args.accept_license:
-    accept = input(f"Do you accept Visual Studio license at {license} ? [y/n]")
-    if not accept or accept[0].lower() != "y":
+    accept = input(f"Do you accept Visual Studio license at {license} ? [y/n] ")
+    if accept and accept[0].lower() != "y":
         exit(0)
 print("test 1")
 if OUTPUT.exists():
-    delete = input("Output directory already exists, delete? [y/n]")
-    if delete:
-        shutil.rmtree(OUTPUT)
-    else:
+    delete = input("Output directory already exists, delete? [y/n] ")
+    if delete and delete[0].lower != "y":
         sys.exit("Program terminated. Remove output directory to safely proceed.")
+    shutil.rmtree(OUTPUT, ignore_errors=False)
+    OUTPUT.rmdir()
 OUTPUT.mkdir()
 total_download = 0
 print("test 2")
