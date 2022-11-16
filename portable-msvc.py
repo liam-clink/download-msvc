@@ -34,11 +34,14 @@ def download(url):
 
 
 def download_with_progress(url, check, name, f):
+    # Initialize an in-memory binary stream
     data = io.BytesIO()
     while True:
         try:
             # urlopen() returns a child of Request object with added methods getinfo(), geturl(), info()
             res = urllib.request.urlopen(url)
+            print(res)
+            input()
             total = int(res.headers["Content-Length"])
             size = 0
             while True:
@@ -110,7 +113,7 @@ payload = vs["payloads"][0]["url"]
 vsmanifest = json.loads(download(payload))
 # Keys for vsmanifest: 'manifestVersion', 'engineVersion', 'info', 'signers', 'packages', 'deprecate', 'signature'
 
-### find MSVC & WinSDK versions
+## Create dictionary of all packages
 packages = {}
 for p in vsmanifest["packages"]:
     # This is a bizarre idiom of python. What this does is: if the key p["id"].lower() doesn't exist, add it with an empty list as its value
@@ -125,48 +128,52 @@ for p in vsmanifest["packages"]:
 fp = open("packages.json", "w")
 fp.write(json.dumps(packages, sort_keys=True, indent=4, separators=(",", ": ")))
 
-msvc = {}
-sdk = {}
-
-for pid, p in packages.items():
-    if pid.startswith("Microsoft.VisualStudio.Component.VC.".lower()) and pid.endswith(
-        ".x86.x64".lower()
-    ):
-        pver = ".".join(pid.split(".")[4:6])
-        if pver[0].isnumeric():
-            msvc[pver] = pid
-    elif pid.startswith(
+### find MSVC & WinSDK versions
+msvc_versions = {}
+sdk_versions = {}
+for package_id in packages.keys():
+    if package_id.startswith(
+        "Microsoft.VisualStudio.Component.VC.".lower()
+    ) and package_id.endswith(".x86.x64".lower()):
+        package_version = ".".join(package_id.split(".")[4:-2])
+        if package_version[0].isnumeric():
+            msvc_versions[package_version] = package_id
+    elif package_id.startswith(
         "Microsoft.VisualStudio.Component.Windows10SDK.".lower()
-    ) or pid.startswith("Microsoft.VisualStudio.Component.Windows11SDK.".lower()):
-        pver = pid.split(".")[-1]
-        if pver.isnumeric():
-            sdk[pver] = pid
-    elif pid.startswith("Microsoft.Windows.CppWinRT".lower()):
-        pver = pid.split(".")[-1]
-        if pver.isnumeric():
-            sdk[pver] = pid
+    ) or package_id.startswith(
+        "Microsoft.VisualStudio.Component.Windows11SDK.".lower()
+    ):
+        package_version = package_id.split(".")[-1]
+        if package_version.isnumeric():
+            sdk_versions[package_version] = package_id
+    elif package_id.startswith("Microsoft.Windows.CppWinRT".lower()):
+        package_version = package_id.split(".")[-1]
+        if package_version.isnumeric():
+            sdk_versions[package_version] = package_id
 
 
 if args.show_versions:
-    print("MSVC versions:", " ".join(sorted(msvc.keys())))
-    print("Windows SDK versions:", " ".join(sorted(sdk.keys())))
+    print("MSVC versions:", " ".join(sorted(msvc_versions.keys())))
+    print("Windows SDK versions:", " ".join(sorted(sdk_versions.keys())))
     exit(0)
 
-msvc_ver = args.msvc_version or max(sorted(msvc.keys()))
-sdk_ver = args.sdk_version or max(sorted(sdk.keys()))
+msvc_version = args.msvc_version or max(sorted(msvc_versions.keys()))
+sdk_version = args.sdk_version or max(sorted(sdk_versions.keys()))
 
-if msvc_ver in msvc:
-    msvc_pid = msvc[msvc_ver]
-    msvc_ver = ".".join(msvc_pid.split(".")[4:-2])
+if msvc_version in msvc_versions:
+    msvc_pid = msvc_versions[msvc_version]
+    if msvc_version != ".".join(msvc_pid.split(".")[4:-2]):
+        # This shouldn't be possible
+        raise ValueError("Input msvc_version is invalid")
 else:
-    exit(f"Unknown MSVC version: f{args.msvc_version}")
+    exit(f"Unknown MSVC version: v{args.msvc_version}")
 
-if sdk_ver in sdk:
-    sdk_pid = sdk[sdk_ver]
+if sdk_version in sdk_versions:
+    sdk_pid = sdk_versions[sdk_version]
 else:
-    exit(f"Unknown Windows SDK version: f{args.sdk_version}")
+    exit(f"Unknown Windows SDK version: v{args.sdk_version}")
 
-print(f"Downloading MSVC v{msvc_ver} and Windows SDK v{sdk_ver}")
+print(f"Downloading MSVC v{msvc_version} and Windows SDK v{sdk_version}")
 
 
 ### agree to license
@@ -183,6 +190,8 @@ if not args.accept_license:
     if accept and accept[0].lower() != "y":
         exit(0)
 print("test 1")
+
+## Clear output directory
 if OUTPUT.exists():
     delete = input("Output directory already exists, delete? [y/n] ")
     if delete and delete[0].lower != "y":
@@ -191,22 +200,22 @@ if OUTPUT.exists():
 OUTPUT.mkdir()
 total_download = 0
 print("test 2")
-### download MSVC
 
+### download MSVC
 msvc_packages = [
     # MSVC binaries
-    f"microsoft.vc.{msvc_ver}.tools.host{HOST}.target{TARGET}.base",
-    f"microsoft.vc.{msvc_ver}.tools.host{HOST}.target{TARGET}.res.base",
+    f"microsoft.vc.{msvc_version}.tools.host{HOST}.target{TARGET}.base",
+    f"microsoft.vc.{msvc_version}.tools.host{HOST}.target{TARGET}.res.base",
     # MSVC headers
-    f"microsoft.vc.{msvc_ver}.crt.headers.base",
+    f"microsoft.vc.{msvc_version}.crt.headers.base",
     # MSVC libs
-    f"microsoft.vc.{msvc_ver}.crt.{TARGET}.desktop.base",
-    f"microsoft.vc.{msvc_ver}.crt.{TARGET}.store.base",
+    f"microsoft.vc.{msvc_version}.crt.{TARGET}.desktop.base",
+    f"microsoft.vc.{msvc_version}.crt.{TARGET}.store.base",
     # MSVC runtime source
-    f"microsoft.vc.{msvc_ver}.crt.source.base",
+    f"microsoft.vc.{msvc_version}.crt.source.base",
     # ASAN
-    f"microsoft.vc.{msvc_ver}.asan.headers.base",
-    f"microsoft.vc.{msvc_ver}.asan.{TARGET}.base",
+    f"microsoft.vc.{msvc_version}.asan.headers.base",
+    f"microsoft.vc.{msvc_version}.asan.{TARGET}.base",
     # MSVC redist
     # f"microsoft.vc.{msvc_ver}.crt.redist.x64.base",
     ## Optional stuff
@@ -217,18 +226,18 @@ msvc_packages = [
     # Microsoft Foundational Classes, "microsoft.visualstudio.component.vc.{msvc_ver}.mfc"
     # f"microsoft.vc.{msvc_ver}.mfc.redist.x64",
     # f"microsoft.vc.{msvc_ver}.mfc.redist.x64.base",
-    f"microsoft.vc.{msvc_ver}.mfc.headers",
-    f"microsoft.vc.{msvc_ver}.mfc.source",
-    f"microsoft.vc.{msvc_ver}.mfc.x64.spectre",
-    f"microsoft.vc.{msvc_ver}.mfc.x86.spectre",
-    f"microsoft.vc.{msvc_ver}.mfc.mbcs",  # Multi-Byte Character Set
-    f"microsoft.vc.{msvc_ver}.mfc.mbcs.x64",
+    f"microsoft.vc.{msvc_version}.mfc.headers",
+    f"microsoft.vc.{msvc_version}.mfc.source",
+    f"microsoft.vc.{msvc_version}.mfc.x64.spectre",
+    f"microsoft.vc.{msvc_version}.mfc.x86.spectre",
+    f"microsoft.vc.{msvc_version}.mfc.mbcs",  # Multi-Byte Character Set
+    f"microsoft.vc.{msvc_version}.mfc.mbcs.x64",
     f"microsoft.visualstudio.vc.ide.mfc",
     f"microsoft.visualstudio.vc.ide.mfc.resources",
     # Active Template Library, dependency of MFC, "microsoft.visualstudio.component.vc.{msvc_ver}.atl"
-    f"microsoft.vc.{msvc_ver}.atl.headers",
-    f"microsoft.vc.{msvc_ver}.atl.source",
-    f"microsoft.vc.{msvc_ver}.atl.x64",
+    f"microsoft.vc.{msvc_version}.atl.headers",
+    f"microsoft.vc.{msvc_version}.atl.source",
+    f"microsoft.vc.{msvc_version}.atl.x64",
     f"microsoft.visualstudio.vc.ide.atl",
     f"microsoft.visualstudio.vc.ide.atl.resources",
 ]
