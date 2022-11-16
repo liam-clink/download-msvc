@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import collections.abc
 import io
 import os
 import sys
@@ -7,6 +8,7 @@ import shutil
 import json
 import shutil
 import hashlib
+import typing
 from urllib.error import URLError
 import zipfile
 import tempfile
@@ -40,8 +42,6 @@ def download_with_progress(url, check, name, f):
         try:
             # urlopen() returns a child of Request object with added methods getinfo(), geturl(), info()
             res = urllib.request.urlopen(url)
-            print(res)
-            input()
             total = int(res.headers["Content-Length"])
             size = 0
             while True:
@@ -74,7 +74,7 @@ def get_msi_cabs(msi):
         yield msi[index - 32 : index + 4].decode("ascii")
 
 
-def first(items, cond):
+def first(items: collections.abc.Iterable, cond: typing.Callable):
     return next(item for item in items if cond(item))
 
 
@@ -147,7 +147,7 @@ for package_id in packages.keys():
         if package_version.isnumeric():
             sdk_versions[package_version] = package_id
 
-
+## Select MSVC and Windows SDK versions
 if args.show_versions:
     print("MSVC versions:", " ".join(sorted(msvc_versions.keys())))
     print("Windows SDK versions:", " ".join(sorted(sdk_versions.keys())))
@@ -194,8 +194,6 @@ if OUTPUT.exists():
         sys.exit("Program terminated. Remove output directory to safely proceed.")
     shutil.rmtree(OUTPUT, ignore_errors=False)
 OUTPUT.mkdir()
-total_download = 0
-print("test 2")
 
 ### download MSVC
 msvc_packages = [
@@ -219,32 +217,27 @@ msvc_packages = [
     f"microsoft.windows.cppwinrt.dev17",
     #
     f"microsoft.visualstudio.vc.vcvars",
-    # Microsoft Foundational Classes, "microsoft.visualstudio.component.vc.{msvc_ver}.mfc"
-    # f"microsoft.vc.{msvc_ver}.mfc.redist.x64",
-    # f"microsoft.vc.{msvc_ver}.mfc.redist.x64.base",
-    f"microsoft.vc.{msvc_version}.mfc.headers",
-    f"microsoft.vc.{msvc_version}.mfc.source",
-    f"microsoft.vc.{msvc_version}.mfc.x64.spectre",
-    f"microsoft.vc.{msvc_version}.mfc.x86.spectre",
-    f"microsoft.vc.{msvc_version}.mfc.mbcs",  # Multi-Byte Character Set
-    f"microsoft.vc.{msvc_version}.mfc.mbcs.x64",
-    f"microsoft.visualstudio.vc.ide.mfc",
-    f"microsoft.visualstudio.vc.ide.mfc.resources",
-    # Active Template Library, dependency of MFC, "microsoft.visualstudio.component.vc.{msvc_ver}.atl"
-    f"microsoft.vc.{msvc_version}.atl.headers",
-    f"microsoft.vc.{msvc_version}.atl.source",
-    f"microsoft.vc.{msvc_version}.atl.x64",
-    f"microsoft.visualstudio.vc.ide.atl",
-    f"microsoft.visualstudio.vc.ide.atl.resources",
+    # Microsoft Foundational Classes
+    f"microsoft.visualstudio.component.vc.{msvc_version}.mfc",
 ]
-print("test 3")
-for pkg in msvc_packages:
-    p = first(packages[pkg], lambda p: p.get("language") in (None, "en-US"))
-    # TODO: Here I could add a search for p.get("dependencies"), or perhaps earlier, build a tree
+
+print("Downloading selected MSVC Packages")
+total_download = 0
+
+
+def get_package(package: str):
+    global total_download
+    p = first(packages[package], lambda p: p.get("language") in (None, "en-US"))
+    # TODO: Download dependencies only once, not every time they appear
+    if "dependencies" in p.keys():
+        dependencies = [key.lower() for key in p["dependencies"].keys()]
+        for dep in dependencies:
+            get_package(dep)
     for payload in p["payloads"]:
         with tempfile.TemporaryFile() as f:
-            data = download_with_progress(payload["url"], payload["sha256"], pkg, f)
+            data = download_with_progress(payload["url"], payload["sha256"], package, f)
             total_download += len(data)
+            # .vsix files are just .zip files with a different extension
             with zipfile.ZipFile(f) as z:
                 for name in z.namelist():
                     if name.startswith("Contents/"):
@@ -253,8 +246,11 @@ for pkg in msvc_packages:
                         out.write_bytes(z.read(name))
 
 
+for pkg in msvc_packages:
+    get_package(pkg)
+
+
 ### download Windows SDK
-print("test 4")
 sdk_packages = [
     # Windows SDK tools (like rc.exe & mt.exe)
     f"Windows SDK for Windows Store Apps Tools-x86_en-us.msi",
