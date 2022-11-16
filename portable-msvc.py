@@ -146,10 +146,6 @@ for package_id in packages.keys():
         package_version = package_id.split(".")[-1]
         if package_version.isnumeric():
             sdk_versions[package_version] = package_id
-    elif package_id.startswith("Microsoft.Windows.CppWinRT".lower()):
-        package_version = package_id.split(".")[-1]
-        if package_version.isnumeric():
-            sdk_versions[package_version] = package_id
 
 
 if args.show_versions:
