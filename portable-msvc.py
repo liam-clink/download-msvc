@@ -223,16 +223,28 @@ msvc_packages = [
 
 print("Downloading selected MSVC Packages")
 total_download = 0
+already_gotten_packages = []
 
 
 def get_package(package: str):
     global total_download
+    global already_gotten_packages
+
+    if package in already_gotten_packages:
+        return
+
     p = first(packages[package], lambda p: p.get("language") in (None, "en-US"))
-    # TODO: Download dependencies only once, not every time they appear
     if "dependencies" in p.keys():
-        dependencies = [key.lower() for key in p["dependencies"].keys()]
-        for dep in dependencies:
-            get_package(dep)
+        dependencies = p["dependencies"]
+        for dep_key, dep_val in dependencies.items():
+            if type(dep_val) == str:
+                get_package(dep_key.lower())
+            elif "id" in dep_val.keys():
+                get_package(dep_val["id"].lower())
+
+    # Currently excluding msi payloads, may change later
+    if "payloads" not in p.keys() or p["type"] != "Vsix":
+        return
     for payload in p["payloads"]:
         with tempfile.TemporaryFile() as f:
             data = download_with_progress(payload["url"], payload["sha256"], package, f)
@@ -244,6 +256,7 @@ def get_package(package: str):
                         out = OUTPUT / Path(name).relative_to("Contents")
                         out.parent.mkdir(parents=True, exist_ok=True)
                         out.write_bytes(z.read(name))
+    already_gotten_packages.append(p["id"].lower())
 
 
 for pkg in msvc_packages:
