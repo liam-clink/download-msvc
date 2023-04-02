@@ -75,7 +75,7 @@ def get_msi_cabs(msi):
 
 
 def first(items: collections.abc.Iterable, cond: typing.Callable):
-    return next(item for item in items if cond(item))
+    return next((item for item in items if cond(item)))  # , items[0])
 
 
 ### parse command-line arguments
@@ -95,13 +95,18 @@ ap.add_argument(
 )
 ap.add_argument("--msvc-version", help="Get specific MSVC version")
 ap.add_argument("--sdk-version", help="Get specific Windows SDK version")
+ap.add_argument(
+    "--get-complete-manifest",
+    const=True,
+    action="store_const",
+    help="Download all packages and combine their manifests, used to determine which packages provides which files",
+)
 args = ap.parse_args()
 
 
 ### get main manifest
 print("Downloading main manifest...")
 manifest = json.loads(download(MANIFEST_URL))
-
 ### download VS manifest
 print("Downloading VS manifest...")
 vs = first(
@@ -125,8 +130,48 @@ for p in vsmanifest["packages"]:
     # The more understandable (although perhaps less idiomatic) way to do this is
     packages.setdefault(p["id"].lower(), [])
     packages[p["id"].lower()].append(p)
+# Write packages.json
 fp = open("packages.json", "w")
 fp.write(json.dumps(packages, sort_keys=True, indent=4, separators=(",", ": ")))
+# Write package_names.txt for easier browsing
+fp = open("package_names.txt", "w")
+for package_key, package_value in packages.items():
+    fp.write(package_key + "\n")
+
+
+# Get comprehensive manifest (expensive!)
+def get_package_manifest(package: str) -> dict:
+    p = first(packages[package], lambda p: p.get("language") in (None, "en-US"))
+    """    p = first(
+        packages[package],
+        lambda p: (p.get("language") in (None, "en-US"))
+        if ("language" in p.keys())
+        else None,
+    )"""
+
+    # Currently excluding msi payloads, may change later
+    if "payloads" not in p.keys() or p["type"] != "Vsix":
+        return
+    for payload in p["payloads"]:
+        with tempfile.TemporaryFile() as f:
+            data = download_with_progress(payload["url"], payload["sha256"], package, f)
+            # .vsix files are just .zip files with a different extension
+            with zipfile.ZipFile(f) as z:
+                if "manifest.json" in z.namelist():
+                    out = OUTPUT
+                    # out.write_bytes(z.read('manifest.json'))
+                    return json.loads(z.read("manifest.json"))
+
+
+if args.get_complete_manifest:
+    print("Getting complete manifest, will take a while...")
+    complete_manifest = {}
+    for package_key, package_value in packages.items():
+        complete_manifest[package_key] = get_package_manifest(package_key)
+    fp = open("complete_manifest.json", "w")
+    fp.write(
+        json.dumps(complete_manifest, sort_keys=True, indent=4, separators=(",", ": "))
+    )
 
 ### find MSVC & WinSDK versions
 msvc_versions = {}
@@ -140,13 +185,10 @@ for package_id in packages.keys():
             msvc_versions[package_version] = package_id
     elif package_id.startswith(
         "Microsoft.VisualStudio.Component.Windows10SDK.".lower()
-    ) or package_id.startswith(
-        "Microsoft.VisualStudio.Component.Windows11SDK.".lower()
-    ):
+    ):  # or package_id.startswith("Microsoft.VisualStudio.Component.Windows11SDK.".lower()):
         package_version = package_id.split(".")[-1]
         if package_version.isnumeric():
             sdk_versions[package_version] = package_id
-
 ## Select MSVC and Windows SDK versions
 if args.show_versions:
     print("MSVC versions:", " ".join(sorted(msvc_versions.keys())))
@@ -165,7 +207,7 @@ else:
     exit(f"Unknown MSVC version: v{args.msvc_version}")
 
 if sdk_version in sdk_versions:
-    sdk_pid = sdk_versions[sdk_version]
+    sdk_package_id = sdk_versions[sdk_version]
 else:
     exit(f"Unknown Windows SDK version: v{args.sdk_version}")
 
@@ -196,6 +238,7 @@ if OUTPUT.exists():
 OUTPUT.mkdir()
 
 ### download MSVC
+# select from "microsoft.visualstudio.workload.nativedesktop"
 msvc_packages = [
     # MSVC binaries
     f"microsoft.vc.{msvc_version}.tools.host{HOST}.target{TARGET}.base",
@@ -212,11 +255,17 @@ msvc_packages = [
     f"microsoft.vc.{msvc_version}.asan.{TARGET}.base",
     # MSVC redist
     # f"microsoft.vc.{msvc_ver}.crt.redist.x64.base",
+    # Need vcvars to set up environment variables and such
+    f"microsoft.visualstudio.vc.vcvars",
+    # These tools include the Auxiliary/Build/Microsoft.VCToolsVersion.default.txt
+    # and Auxiliary/Build/Microsoft.VCRedistVersion.default.txt files
+    # asked for by the vcvars.bat
+    f"microsoft.visualcpp.tools.core.x86",
+    # Needed for vsdevcmd.bat etc
+    f"microsoft.visualstudio.vc.devcmd",
     ## Optional stuff
     # CPPWinRT, Dev17 is the codename for Visual Studio 22
     f"microsoft.windows.cppwinrt.dev17",
-    #
-    f"microsoft.visualstudio.vc.vcvars",
     # Microsoft Foundational Classes
     f"microsoft.visualstudio.component.vc.{msvc_version}.mfc",
 ]
@@ -262,7 +311,6 @@ def get_package(package: str):
 for pkg in msvc_packages:
     get_package(pkg)
 
-
 ### download Windows SDK
 sdk_packages = [
     # Windows SDK tools (like rc.exe & mt.exe)
@@ -273,6 +321,8 @@ sdk_packages = [
     # Windows SDK libs
     f"Windows SDK for Windows Store Apps Libs-x86_en-us.msi",
     f"Windows SDK Desktop Libs {TARGET}-x86_en-us.msi",
+    # Windows SDK Desktop Tools
+    f"Windows SDK Desktop Tools x64-x86_en-us.msi",
     # CRT headers & libs
     f"Universal CRT Headers Libraries and Sources-x86_en-us.msi",
     # CRT redist
@@ -282,8 +332,15 @@ sdk_packages = [
 with tempfile.TemporaryDirectory() as d:
     dst = Path(d)
 
-    sdk_pkg = packages[sdk_pid][0]
+    sdk_pkg = packages[sdk_package_id][0]
     sdk_pkg = packages[first(sdk_pkg["dependencies"], lambda x: True).lower()][0]
+
+    payloads = [ele["fileName"] for ele in sdk_pkg["payloads"]]
+
+    fp = open("sdk_payloads.txt", "w")
+    for payload in payloads:
+        fp.write(payload + "\n")
+    fp.close()
 
     msi = []
     cabs = []
@@ -344,7 +401,7 @@ finally:
 
 ### cleanup
 
-shutil.rmtree(OUTPUT / "Common7", ignore_errors=True)
+# shutil.rmtree(OUTPUT / "Common7", ignore_errors=True)
 for f in ["Auxiliary", f"lib/{TARGET}/store", f"lib/{TARGET}/uwp"]:
     shutil.rmtree(OUTPUT / "VC/Tools/MSVC" / msvcv / f)
 for f in OUTPUT.glob("*.msi"):
@@ -362,7 +419,7 @@ for arch in ["x86", "x64", "arm", "arm64"]:
 
 
 ### setup.bat
-
+###TODO: change path of vswhere.exe in Common7/Tools/Launch-VsDevShell.ps1 and VsDevCmd.bat
 SETUP = f"""@echo off
 
 set ROOT=%~dp0
